@@ -19,6 +19,7 @@ import javax.xml.bind.Marshaller;
 import javax.xml.bind.Unmarshaller;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.namespace.QName;
+import javax.xml.parsers.SAXParserFactory;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLOutputFactory;
 import javax.xml.stream.XMLStreamConstants;
@@ -26,7 +27,10 @@ import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
 import javax.xml.stream.XMLStreamWriter;
 import javax.xml.transform.Source;
-import javax.xml.transform.stream.StreamSource;
+import javax.xml.transform.sax.SAXSource;
+
+import org.xml.sax.InputSource;
+import org.xml.sax.XMLReader;
 
 import com.alibaba.fastjson.JSONObject;
 import com.foxinmy.weixin4j.util.Consts;
@@ -45,6 +49,45 @@ public final class XmlStream {
 	private final static String ROOT_ELEMENT_XML = "xml";
 	private final static String XML_VERSION = "1.0";
 	private final static ConcurrentHashMap<Class<?>, JAXBContext> jaxbContexts = new ConcurrentHashMap<Class<?>, JAXBContext>();
+	private final static SAXParserFactory spf = SAXParserFactory.newInstance();
+	static {
+		try {
+			// This is the PRIMARY defense. If DTDs (doctypes) are disallowed,
+			// almost all XML entity attacks are prevented
+			// Xerces 2 only -
+			// http://xerces.apache.org/xerces2-j/features.html#disallow-doctype-decl
+			spf.setFeature(
+					"http://apache.org/xml/features/disallow-doctype-decl",
+					true);
+			// If you can't completely disable DTDs, then at least do the
+			// following:
+			// Xerces 1 -
+			// http://xerces.apache.org/xerces-j/features.html#external-general-entities
+			// Xerces 2 -
+			// http://xerces.apache.org/xerces2-j/features.html#external-general-entities
+			// JDK7+ - http://xml.org/sax/features/external-general-entities
+			spf.setFeature(
+					"http://xml.org/sax/features/external-general-entities",
+					false);
+			// Xerces 1 -
+			// http://xerces.apache.org/xerces-j/features.html#external-parameter-entities
+			// Xerces 2 -
+			// http://xerces.apache.org/xerces2-j/features.html#external-parameter-entities
+			// JDK7+ - http://xml.org/sax/features/external-parameter-entities
+			spf.setFeature(
+					"http://xml.org/sax/features/external-parameter-entities",
+					false);
+			// Disable external DTDs as well
+			spf.setFeature(
+					"http://apache.org/xml/features/nonvalidating/load-external-dtd",
+					false);
+			// and these as well, per Timothy Morgan's 2014 paper:
+			// "XML Schema, DTD, and Entity Attacks"
+			spf.setXIncludeAware(false);
+		} catch (Exception e) {
+			;
+		}
+	}
 
 	/**
 	 * Xml2Bean
@@ -60,7 +103,21 @@ public final class XmlStream {
 		JAXBContext jaxbContext = getJaxbContext(clazz);
 		try {
 			Unmarshaller unmarshaller = jaxbContext.createUnmarshaller();
-			Source source = new StreamSource(content);
+			XMLReader reader = spf.newSAXParser().getXMLReader();
+			reader.setFeature(
+					"http://apache.org/xml/features/disallow-doctype-decl",
+					true);
+			reader.setFeature(
+					"http://apache.org/xml/features/nonvalidating/load-external-dtd",
+					false); // This may not be strictly required as DTDs
+							// shouldn't be allowed at all, per previous line.
+			reader.setFeature(
+					"http://xml.org/sax/features/external-general-entities",
+					false);
+			reader.setFeature(
+					"http://xml.org/sax/features/external-parameter-entities",
+					false);
+			Source source = new SAXSource(reader, new InputSource(content));
 			XmlRootElement rootElement = clazz
 					.getAnnotation(XmlRootElement.class);
 			if (rootElement == null
@@ -73,12 +130,9 @@ public final class XmlStream {
 			} else {
 				return (T) unmarshaller.unmarshal(source);
 			}
-		} catch (JAXBException ex) {
+		} catch (Exception ex) {
 			throw new RuntimeException("Could not unmarshaller class [" + clazz
-					+ "]: " + ex.getMessage(), ex);
-		} catch (NoSuchMethodException ex) {
-			throw new RuntimeException("Could not unmarshaller class [" + clazz
-					+ "]: " + ex.getMessage(), ex);
+					+ "]", ex);
 		} finally {
 			if (content != null) {
 				try {
@@ -259,12 +313,9 @@ public final class XmlStream {
 			} else {
 				marshaller.marshal(t, os);
 			}
-		} catch (JAXBException ex) {
+		} catch (Exception ex) {
 			throw new RuntimeException("Could not marshal class [" + clazz
-					+ "]: " + ex.getMessage(), ex);
-		} catch (NoSuchMethodException ex) {
-			throw new RuntimeException("Could not marshaller class [" + clazz
-					+ "]: " + ex.getMessage(), ex);
+					+ "] ", ex);
 		} finally {
 			if (os != null) {
 				try {
@@ -285,7 +336,7 @@ public final class XmlStream {
 			} catch (JAXBException ex) {
 				throw new RuntimeException(
 						"Could not instantiate JAXBContext for class [" + clazz
-								+ "]: " + ex.getMessage(), ex);
+								+ "] ", ex);
 			}
 		}
 		return jaxbContext;
